@@ -1,0 +1,169 @@
+#!/usr/bin/env perl
+# TODO:
+# implement -s and -r flags
+# implement --timeout flag in main loop
+# create --help / -h flag and possibly a man page
+#
+# listen: a simple configurable build system
+# created by Bryson Steck, @brysonsteck on GitHub
+# free and open source under the GPL Version 3
+# 
+# Usage
+# listen [flags] [file(s) to watch] [command(s) to run on file changes]
+# 
+# Flags
+# -a if all of the files have changed, required if multiple files
+# -o if any one of the files have changed, required if multiple files
+# -s to use checksum on file change instead of when the file was modified
+# -r immediately run exec command, then start listening
+# --timeout=[time] change timeout time in whole seconds (DEFAULT 1 SECOND)
+
+# GLOBALS
+local $| = 1;
+my $ARGC = scalar @ARGV;
+my $TIMEOUT = 1;
+my $START_LISTEN = 0;
+my $EXEC_POSITION = $ARGC - 1;
+my $EXEC_LISTEN = undef;
+my $ALL_FLAG = undef;
+my $ANY_FLAG = undef;
+my $MULTI_FILES = undef;
+my $CHECKSUM_FLAG = undef;
+my $CHECKSUM_COMMAND = "sha1sum";
+
+sub flags {
+  if ($ARGC == 0) {
+    print "listen: To what?\n";
+    exit 2;
+  }
+
+  my $current_arg = 0;
+
+  foreach $arg (@ARGV) {
+    if ($arg =~ m/-[aos]/) {
+      if ($arg =~ m/a/) {
+        $ALL_FLAG = "def";
+      } 
+      if ($arg =~ m/o/) {
+        $ANY_FLAG = "def";
+      }
+      if ($arg =~ m/s/) {
+        $CHECKSUM_FLAG = "def";
+      }
+    } elsif ($arg =~ m/--timeout=/) {
+      my @timeout_split = split /\=/, $arg;
+      if (scalar @timeout_split == 1) {
+        print "timeout flag invalid\n";
+        exit 2;
+      } elsif (int($timeout_split[1]) > 0) {
+        $TIMEOUT = $timeout_split[1];
+        print "timeout is now $TIMEOUT seconds\n";
+      } else {
+        print "timeout flag invalid\n";
+        exit 2;
+      }
+    } else {
+      last;
+    }
+    $current_arg++;
+  }
+
+  $START_LISTEN = $current_arg;
+}
+
+sub get_exec {
+  if ($START_LISTEN + 1 == $ARGC) {
+    print "listen: Not enough arguments\n";
+    exit 3;
+  }
+
+  $EXEC_LISTEN = $ARGV[-1];
+}
+
+sub require_flags {
+  if ($EXEC_POSITION - $START_LISTEN != 1) {
+    if (!$ALL_FLAG and !$ANY_FLAG) {
+      print "listen: Either -a or -o must be specified with multiple files to watch\n";
+      exit 4;
+    } elsif ($ALL_FLAG and $ANY_FLAG) {
+      print "listen: You must specify either -a or -o for multiple files, not both\n";
+      exit 4;
+    }
+
+    $MULTI_FILES = "def";
+  }
+}
+
+sub check_files {
+  for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+    if (not -e $ARGV[$i]) {
+      print "listen: $ARGV[$i]: No such file or directory\n";
+      exit 5;
+    }
+    if (not -r $ARGV[$i]) {
+      print "listen: $ARGV[$i]: Permission denied (warning)\n";
+    }
+  }
+}
+
+sub start {
+  print "This shell command will run:\n";
+  print "  $EXEC_LISTEN\n";
+
+  if ($MULTI_FILES) {
+    if ($ALL_FLAG) {
+      print "When all the files below have been modified:\n";
+      for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+        print "  $ARGV[$i]\n";
+      }
+    } elsif ($ANY_FLAG) {
+      print "When any of the files below have been modified:\n";
+      for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+        print "  $ARGV[$i]\n";
+      }
+    }
+  } else {
+    print "When this file has been modified:\n";
+    print "  $ARGV[$START_LISTEN]\n";
+  }
+
+  print "Starting now...\n";
+
+  my $previous_epoch = (stat($ARGV[$START_LISTEN]))[9];
+  my $current_epoch = (stat($ARGV[$START_LISTEN]))[9];
+  while (1) {
+    $current_epoch = (stat($ARGV[$START_LISTEN]))[9];
+    if ($current_epoch > $previous_epoch) {
+      print "--- File \"$ARGV[$START_LISTEN]\" modified. Running command... ---\n";
+      system $EXEC_LISTEN;
+      my $status = $? >> 8;
+      if (int($status) != 0) {
+        print "--- WARNING: Exit code is $status. Returned to listen... ---\n";
+      } else {
+        print "--- Returned to listen... ---\n";
+      }
+
+      $previous_epoch = $current_epoch;
+    }
+
+    sleep(1);
+  }
+}
+
+# ---- START OF SCRIPT ----
+# start by checking flags
+flags();
+
+# get executable to run on trigger
+get_exec();
+
+# check if additional flags are needed 
+# because multiple files are being listened to
+require_flags();
+
+# check if file(s) exist
+check_files();
+
+# start listen
+start();
+
