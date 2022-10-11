@@ -2,7 +2,7 @@
 # TODO:
 # implement -s and -r flags
 # implement --timeout flag in main loop
-# create --help / -h flag and possibly a man page
+# possibly create a man page
 #
 # listen: a simple configurable build system
 # created by Bryson Steck, @brysonsteck on GitHub
@@ -12,14 +12,16 @@
 # listen [flags] [file(s) to watch] [command(s) to run on file changes]
 # 
 # Flags
-# -a if all of the files have changed, required if multiple files
-# -o if any one of the files have changed, required if multiple files
+# -a, --all if all of the files have changed, required if multiple files
+# -o, --any if any one of the files have changed, required if multiple files
 # -s to use checksum on file change instead of when the file was modified
-# -r immediately run exec command, then start listening
+# -r, --run immediately run exec command, then start listening
 # --timeout=[time] change timeout time in whole seconds (DEFAULT 1 SECOND)
+# --help prints help
 
 # GLOBALS
 local $| = 1;
+my $VERSION = "0.1.0";
 my $ARGC = scalar @ARGV;
 my $TIMEOUT = 1;
 my $START_LISTEN = 0;
@@ -29,7 +31,10 @@ my $ALL_FLAG = undef;
 my $ANY_FLAG = undef;
 my $MULTI_FILES = undef;
 my $CHECKSUM_FLAG = undef;
-my $CHECKSUM_COMMAND = "sha1sum";
+my $CHECKSUM_COMMAND = "/usr/bin/env cksum";
+my $RUN_NOW = undef;
+my $black = "\033[0;90m";
+my $nocolor = "\033[0m";
 
 sub flags {
   if ($ARGC == 0) {
@@ -40,7 +45,7 @@ sub flags {
   my $current_arg = 0;
 
   foreach $arg (@ARGV) {
-    if ($arg =~ m/-[aos]/) {
+    if ($arg =~ m/-[aosrhv]/) {
       if ($arg =~ m/a/) {
         $ALL_FLAG = "def";
       } 
@@ -49,6 +54,34 @@ sub flags {
       }
       if ($arg =~ m/s/) {
         $CHECKSUM_FLAG = "def";
+      }
+      if ($arg =~ m/r/) {
+        $RUN_NOW = "def";
+      }
+      if ($arg =~ m/h/) {
+        print "\nlisten v$VERSION - a simple automation system\n";
+        print "Copyright 2022 Bryson Steck\n";
+        print "Free and open source under the GNU General Public License v3.\n";
+        print "Run 'listen --license' to view the license and warranty disclaimer.\n\n";
+        print "usage: listen [-v | --version] [-h | --help] [-a | --all]\n";
+        print "              [-o | --any] [-s] [-r | --run] FILE1 [FILE2 ...]\n";
+        print "              COMMAND\n\n";
+        print "informational flags:\n";
+        print "  -h | --help    -> Print this message\n";
+        print "  -v | --version -> Print the version of listen\n";
+        print "  --license      -> Print the license/warranty disclaimer\n";
+        print "                    (GNU General Public License v3)\n\n";
+        print "multiple file flags:\n";
+        print "  -a | --all     -> Run COMMAND if ALL of the files have been modified\n";
+        print "  -o | --any     -> Run COMMAND if ANY of the files have been modified\n\n";
+        print "other flags:\n";
+        print "  -r | --run     -> Run COMMAND before starting listen\n";
+        print "  -s             -> Check for file modification based on cksum\n";
+        print "                    (as opposed to the files' modified timestamp)\n\n";
+        exit 1;
+      }
+      if ($arg =~ m/v/) {
+        print "listen v$VERSION\n";
       }
     } elsif ($arg =~ m/--timeout=/) {
       my @timeout_split = split /\=/, $arg;
@@ -62,6 +95,49 @@ sub flags {
         print "timeout flag invalid\n";
         exit 2;
       }
+    } elsif ($arg =~ m/--help/) {
+      print "\nlisten v$VERSION - a simple automation system\n";
+      print "Copyright 2022 Bryson Steck\n";
+      print "Free and open source under the GNU General Public License v3.\n";
+      print "Run 'listen --license' to view the license and warranty disclaimer.\n\n";
+      print "usage: listen [-v | --version] [-h | --help] [-a | --all]\n";
+      print "              [-o | --any] [-s] [-r | --run] FILE1 [FILE2 ...]\n";
+      print "              COMMAND\n\n";
+      print "informational flags:\n";
+      print "  -h | --help    -> Print this message\n";
+      print "  -v | --version -> Print the version of listen\n";
+      print "  --license      -> Print the license/warranty disclaimer\n";
+      print "                    (GNU General Public License v3)\n\n";
+      print "multiple file flags:\n";
+      print "  -a | --all     -> Run COMMAND if ALL of the files have been modified\n";
+      print "  -o | --any     -> Run COMMAND if ANY of the files have been modified\n\n";
+      print "other flags:\n";
+      print "  -r | --run     -> Run COMMAND before starting listen\n";
+      print "  -s             -> Check for file modification based on cksum\n";
+      print "                    (as opposed to the files' modified timestamp)\n\n";
+      exit 1;
+    } elsif ($arg =~ m/--version/) {
+      print "listen v$VERSION\n";
+      exit 1;
+    } elsif ($arg =~ m/--license/) {
+      print "listen is free and open source under the GNU GPL Version 3.0.\n\n";
+      print "This program is free software: you can redistribute it and/or modify\n";
+      print "it under the terms of the GNU General Public License as published by\n";
+      print "the Free Software Foundation, either version 3 of the License, or\n";
+      print "(at your option) any later version.\n\n";
+      print "This program is distributed in the hope that it will be useful,\n";
+      print "but WITHOUT ANY WARRANTY; without even the implied warranty of\n";
+      print "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n";
+      print "GNU General Public License for more details.\n\n";
+      print "You should have received a copy of the GNU General Public License\n";
+      print "along with this program.  If not, see <https://www.gnu.org/licenses/>.\n";
+      exit 1;
+    } elsif ($arg =~ m/--all/) {
+      $ALL_FLAG = "def";
+    } elsif ($arg =~ m/--any/) {
+      $ANY_FLAG = "def";
+    } elsif ($arg =~ m/--run/) {
+      $RUN_NOW = "def";
     } else {
       last;
     }
@@ -99,51 +175,140 @@ sub check_files {
     if (not -e $ARGV[$i]) {
       print "listen: $ARGV[$i]: No such file or directory\n";
       exit 5;
-    }
-    if (not -r $ARGV[$i]) {
+    } elsif (not -r $ARGV[$i]) {
       print "listen: $ARGV[$i]: Permission denied (warning)\n";
     }
   }
 }
 
+sub diff {
+  if ($CHECKSUM_FLAG) {
+    #my $checksum_files;
+    #for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+    #  $checksum_files = $checksum_files + " $ARGV[$i]";
+    #}
+    #print "$CHECKSUM_COMMAND $checksum_files";
+    #return `$CHECKSUM_COMMAND $checksum_files`
+  } else {
+    my @return;
+
+    for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+      push @return, (stat($ARGV[$i]))[9];
+    }
+
+    return @return;
+  }
+}
+
 sub start {
-  print "This shell command will run:\n";
-  print "  $EXEC_LISTEN\n";
+  if (!$MULTI_FILES) {
+    if ($EXEC_LISTEN =~ m/ _ /) {
+      $EXEC_LISTEN =~ s/ _ / $ARGV[$START_LISTEN] /g;
+    } elsif ($EXEC_LISTEN =~ m/ _/) {
+      $EXEC_LISTEN =~ s/ _/ $ARGV[$START_LISTEN] /g;
+    } elsif ($EXEC_LISTEN =~ m/_ /) {
+      $EXEC_LISTEN =~ s/_ / $ARGV[$START_LISTEN] /g;
+    }
+  }
+
+  print "$black& listen $VERSION\n";
+  print "& This program is free software, and comes with ABSOLUTELY NO WARRANTY.\n";
+  print "& Run 'listen --license' for details.\n&\n";
+  print "& This shell command will run:\n";
+  print "&   $EXEC_LISTEN\n";
 
   if ($MULTI_FILES) {
     if ($ALL_FLAG) {
-      print "When all the files below have been modified:\n";
+      print "& When all the files below have been modified:\n";
       for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
-        print "  $ARGV[$i]\n";
+        print "&   $ARGV[$i]\n";
       }
     } elsif ($ANY_FLAG) {
-      print "When any of the files below have been modified:\n";
+      print "& When any of the files below have been modified:\n";
       for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
-        print "  $ARGV[$i]\n";
+        print "&   $ARGV[$i]\n";
       }
     }
   } else {
-    print "When this file has been modified:\n";
-    print "  $ARGV[$START_LISTEN]\n";
+    print "& When this file has been modified:\n";
+    print "&   $ARGV[$START_LISTEN]\n";
   }
 
-  print "Starting now...\n";
+  if ($RUN_NOW) {
+    print "${black}& Running now, then starting listen...${nocolor}\n";
+    system $EXEC_LISTEN;
+    my $status = $? >> 8;
+    if (int($status) != 0) {
+      print "$black& WARNING: Exit code is $status. Returned to listen...$nocolor\n";
+    } else {
+      print "$black& Returned to listen...$nocolor\n";
+    }
+  } else {
+    print "${black}& Starting now...${nocolor}\n";
+  }
 
-  my $previous_epoch = (stat($ARGV[$START_LISTEN]))[9];
-  my $current_epoch = (stat($ARGV[$START_LISTEN]))[9];
+  my @previous_epoch = diff();
+  my @current_epoch = diff();
+  my @modified_files;
+
+  for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+    push @modified_files, "no";
+  }
+
   while (1) {
-    $current_epoch = (stat($ARGV[$START_LISTEN]))[9];
-    if ($current_epoch > $previous_epoch) {
-      print "--- File \"$ARGV[$START_LISTEN]\" modified. Running command... ---\n";
+    my $run = undef;
+    my $file_changed = undef;
+    @current_epoch = diff();
+
+    if ($MULTI_FILES) {
+      if ($ALL_FLAG) {
+        my $counter = 0;
+
+        foreach $modified (@modified_files) {
+          if (@current_epoch[$counter] != @previous_epoch[$counter]) {
+            $modified = "yes";
+          }
+          $counter++;
+        }
+        foreach $modified (@modified_files) {
+          my $run = 'def';
+          if ($modified !~ "yes") {
+            $run = undef;
+          }
+        }
+      } else {
+        my $counter = 0;
+
+        foreach (@current_epoch) {
+          if ($current_epoch[$counter] != $previous_epoch[$counter]) {
+            $run = "def";
+            $file_changed = $counter;
+          }
+          $counter++;
+        }
+      }
+    } else {
+      if ($current_epoch[0] != $previous_epoch[0]) {
+        $run = "def";
+        $file_changed = 0;
+      }
+    }
+
+    if ($run) {
+      if ($MULTI_FILES) {
+        print "$black& File \"$ARGV[$file_changed + 1]\" modified. Running command...$nocolor\n";
+      } else {
+        print "$black& File \"$ARGV[$START_LISTEN]\" modified. Running command...$nocolor\n";
+      }
       system $EXEC_LISTEN;
       my $status = $? >> 8;
       if (int($status) != 0) {
-        print "--- WARNING: Exit code is $status. Returned to listen... ---\n";
+        print "$black& WARNING: Exit code is $status. Returned to listen...$nocolor\n";
       } else {
-        print "--- Returned to listen... ---\n";
+        print "$black& Returned to listen...$nocolor\n";
       }
 
-      $previous_epoch = $current_epoch;
+      @previous_epoch = @current_epoch;
     }
 
     sleep(1);
