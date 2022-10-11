@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 # TODO:
-# implement -s and -r flags
+# implement -r flag
 # implement --timeout flag in main loop
 # possibly create a man page
 #
@@ -31,10 +31,14 @@ my $ALL_FLAG = undef;
 my $ANY_FLAG = undef;
 my $MULTI_FILES = undef;
 my $CHECKSUM_FLAG = undef;
-my $CHECKSUM_COMMAND = "/usr/bin/env cksum";
 my $RUN_NOW = undef;
 my $black = "\033[0;90m";
 my $nocolor = "\033[0m";
+
+# comment the line below if you use Windows
+my $CHECKSUM_COMMAND = "/usr/bin/env cksum";
+# uncomment the line below if you use Windows
+#my $CHECKSUM_COMMAND = "C:\Windows\System32\certutil.exe -hashfile";
 
 sub flags {
   if ($ARGC == 0) {
