@@ -1,7 +1,5 @@
 #!/usr/bin/env perl
 # TODO:
-# implement -r flag
-# implement --timeout flag in main loop
 # possibly create a man page
 #
 # listen: a simple configurable build system
@@ -52,7 +50,7 @@ sub flags {
 
   foreach $arg (@ARGV) {
     # shorthand args
-    if ($arg =~ m/-[aosrhv]/) {
+    if ($arg =~ m/^-[aosrhv]+$/) {
       if ($arg =~ m/a/) {
         $ALL_FLAG = "def";
       } 
@@ -146,6 +144,13 @@ sub flags {
       $ANY_FLAG = "def";
     } elsif ($arg =~ m/--run/) {
       $RUN_FLAG = "def";
+    # at this point, either it is an unknown flag or the start of the filename(s)
+    } elsif ($arg =~ m/^-[^aosrhv]+$/) {
+      print "listen: Unknown flag: $arg\n";
+      exit 2;
+    } elsif ($arg =~ m/^--[a-z]/) {
+      print "listen: Unknown flag: $arg\n";
+      exit 2;
     } else {
       last;
     }
@@ -323,7 +328,13 @@ sub start {
         # if output differs, mark as modified
         foreach $modified (@modified_files) {
           if (@current_epoch[$counter] != @previous_epoch[$counter]) {
-            $modified = "yes";
+            if ($TIMEOUT) {
+              if (!($current_epoch[$counter] - $previous_epoch[$counter] <= $TIMEOUT)) {
+                $modified = "yes";
+              }
+            } else {
+              $modified = "yes";
+            }
           }
           $counter++;
         }
@@ -342,9 +353,17 @@ sub start {
         # if output differs, run command
         foreach (@current_epoch) {
           if ($current_epoch[$counter] != $previous_epoch[$counter]) {
-            $run = "def";
-            $file_changed = $counter;
-            last;
+            if ($TIMEOUT) {
+              if (!($current_epoch[$counter] - $previous_epoch[$counter] <= $TIMEOUT)) {
+                $run = "def";
+                $file_changed = $counter;
+                last;
+              }
+            } else {
+              $run = "def";
+              $file_changed = $counter;
+              last;
+            }
           }
           $counter++;
         }
@@ -352,8 +371,15 @@ sub start {
     # logic for singular files
     } else {
       if ($current_epoch[0] != $previous_epoch[0]) {
-        $run = "def";
-        $file_changed = 0;
+        if ($TIMEOUT) {
+          if (!($current_epoch[0] - $previous_epoch[0] <= $TIMEOUT)) {
+            $run = "def";
+            $file_changed = 0;
+          }
+        } else {
+          $run = "def";
+          $file_changed = 0;
+        }
       }
     }
 
