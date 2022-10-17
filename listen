@@ -23,7 +23,7 @@
 local $| = 1;
 my $VERSION = "0.1.0";
 my $ARGC = scalar @ARGV;
-my $TIMEOUT = 1;
+my $TIMEOUT = undef;
 my $START_LISTEN = 0;
 my $EXEC_POSITION = $ARGC - 1;
 my $EXEC_LISTEN = undef;
@@ -31,7 +31,7 @@ my $ALL_FLAG = undef;
 my $ANY_FLAG = undef;
 my $MULTI_FILES = undef;
 my $CHECKSUM_FLAG = undef;
-my $RUN_NOW = undef;
+my $RUN_FLAG = undef;
 my $black = "\033[0;90m";
 my $nocolor = "\033[0m";
 
@@ -40,7 +40,9 @@ my $CHECKSUM_COMMAND = "/usr/bin/env cksum";
 # uncomment the line below if you use Windows
 #my $CHECKSUM_COMMAND = "C:\Windows\System32\certutil.exe -hashfile";
 
+# check for flags if any
 sub flags {
+  # quit if no args
   if ($ARGC == 0) {
     print "listen: To what?\n";
     exit 2;
@@ -49,6 +51,7 @@ sub flags {
   my $current_arg = 0;
 
   foreach $arg (@ARGV) {
+    # shorthand args
     if ($arg =~ m/-[aosrhv]/) {
       if ($arg =~ m/a/) {
         $ALL_FLAG = "def";
@@ -60,7 +63,7 @@ sub flags {
         $CHECKSUM_FLAG = "def";
       }
       if ($arg =~ m/r/) {
-        $RUN_NOW = "def";
+        $RUN_FLAG = "def";
       }
       if ($arg =~ m/h/) {
         print "\nlisten v$VERSION - a simple automation system\n";
@@ -87,13 +90,14 @@ sub flags {
       if ($arg =~ m/v/) {
         print "listen v$VERSION\n";
       }
+    # longhand args
     } elsif ($arg =~ m/--timeout=/) {
       my @timeout_split = split /\=/, $arg;
       if (scalar @timeout_split == 1) {
         print "timeout flag invalid\n";
         exit 2;
       } elsif (int($timeout_split[1]) > 0) {
-        $TIMEOUT = $timeout_split[1];
+        $TIMEOUT = int($timeout_split[1]);
         print "timeout is now $TIMEOUT seconds\n";
       } else {
         print "timeout flag invalid\n";
@@ -141,26 +145,32 @@ sub flags {
     } elsif ($arg =~ m/--any/) {
       $ANY_FLAG = "def";
     } elsif ($arg =~ m/--run/) {
-      $RUN_NOW = "def";
+      $RUN_FLAG = "def";
     } else {
       last;
     }
     $current_arg++;
   }
 
+  # set index of the start of file(s)
   $START_LISTEN = $current_arg;
 }
 
+# get last argument as executable
 sub get_exec {
+  # return early if there is no executable
   if ($START_LISTEN + 1 == $ARGC) {
-    print "listen: Not enough arguments\n";
+    print "listen: Executable missing\n";
     exit 3;
   }
-
+  
+  # set executable index
   $EXEC_LISTEN = $ARGV[-1];
 }
 
+# check flags are compatible with each other
 sub require_flags {
+  # if there is multiple files, check if both or no flags are found
   if ($EXEC_POSITION - $START_LISTEN != 1) {
     if (!$ALL_FLAG and !$ANY_FLAG) {
       print "listen: Either -a or -o must be specified with multiple files to watch\n";
@@ -171,40 +181,62 @@ sub require_flags {
     }
 
     $MULTI_FILES = "def";
+  # otherwise if there are flags found for a singular file, quit
+  } else {
+    if ($ALL_FLAG) {
+      print "listen: Invalid argument -a for singular file\n";
+      exit 4;
+    } elsif ($ANY_FLAG) {
+      print "listen: Invalid argument -o for singular file\n";
+      exit 4;
+    }
+  }
+  # if checksum is wanted, make sure timeout is not present
+  if ($CHECKSUM_FLAG) {
+    if ($TIMEOUT) {
+      print "listen: Timeout cannot be used in checksum mode\n";
+      exit 4;
+    }
   }
 }
 
+# check file(s) if they exist and they are accessable
 sub check_files {
   for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
     if (not -e $ARGV[$i]) {
       print "listen: $ARGV[$i]: No such file or directory\n";
       exit 5;
     } elsif (not -r $ARGV[$i]) {
+      # being unable to read a file does not mean the executable will fail
+      # continue anyway, but warn the user
       print "listen: $ARGV[$i]: Permission denied (warning)\n";
     }
   }
 }
 
+# return the checksum/time modified
 sub diff {
-  if ($CHECKSUM_FLAG) {
-    #my $checksum_files;
-    #for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
-    #  $checksum_files = $checksum_files + " $ARGV[$i]";
-    #}
-    #print "$CHECKSUM_COMMAND $checksum_files";
-    #return `$CHECKSUM_COMMAND $checksum_files`
-  } else {
-    my @return;
+  my @return;
 
+  # if checksum wanted, append output to return
+  if ($CHECKSUM_FLAG) {
+    for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+      push @return, `$CHECKSUM_COMMAND $ARGV[$i]`;
+    }
+  # else, append epoch
+  } else {
     for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
       push @return, (stat($ARGV[$i]))[9];
     }
-
-    return @return;
   }
+
+  return @return;
 }
 
+# main subroutine
 sub start {
+  # if underscore is present in command, replace it with file listening to
+  # only if singular file being listened to
   if (!$MULTI_FILES) {
     if ($EXEC_LISTEN =~ m/ _ /) {
       $EXEC_LISTEN =~ s/ _ / $ARGV[$START_LISTEN] /g;
@@ -215,82 +247,109 @@ sub start {
     }
   }
 
+  # print starting information
   print "$black& listen $VERSION\n";
   print "& This program is free software, and comes with ABSOLUTELY NO WARRANTY.\n";
   print "& Run 'listen --license' for details.\n&\n";
   print "& This shell command will run:\n";
   print "&   $EXEC_LISTEN\n";
 
+  # add additional text if in checksum mode
+  my $checksum_text = "";
+  my $modified_text = "been modified:";
+  if ($CHECKSUM_FLAG) {
+    $checksum_text = "the checksum of ";
+    $modified_text = "changed:";
+  }
+
+  # print different things with multiple files depending on flag
   if ($MULTI_FILES) {
     if ($ALL_FLAG) {
-      print "& When all the files below have been modified:\n";
+      print "& When ${checksum_text}all the files below have $modified_text\n";
       for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
         print "&   $ARGV[$i]\n";
       }
     } elsif ($ANY_FLAG) {
-      print "& When any of the files below have been modified:\n";
+      print "& When ${checksum_text}any of the files below have $modified_text\n";
       for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
         print "&   $ARGV[$i]\n";
       }
     }
+  # otherwise if singular, always print this
   } else {
-    print "& When this file has been modified:\n";
+    print "& When ${checksum_text}this file has $modified_text\n";
     print "&   $ARGV[$START_LISTEN]\n";
   }
 
-  if ($RUN_NOW) {
-    print "${black}& Running now, then starting listen...${nocolor}\n";
+  # run command immediately if flag is specified, then start listening
+  if ($RUN_FLAG) {
+    print "& Running now, then starting listen...${nocolor}\n";
     system $EXEC_LISTEN;
     my $status = $? >> 8;
     if (int($status) != 0) {
-      print "$black& WARNING: Exit code is $status. Returned to listen...$nocolor\n";
+      print "& WARNING: Exit code is $status. Returned to listen...$nocolor\n";
     } else {
-      print "$black& Returned to listen...$nocolor\n";
+      print "& Returned to listen...$nocolor\n";
     }
+  # otherwise, start listening
   } else {
-    print "${black}& Starting now...${nocolor}\n";
+    print "& Starting now...$nocolor\n";
   }
 
+  # start by initializing comparison arrays
   my @previous_epoch = diff();
   my @current_epoch = diff();
-  my @modified_files;
 
-  for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
-    push @modified_files, "no";
-  }
-
+  # main loop
   while (1) {
     my $run = undef;
     my $file_changed = undef;
+    my @modified_files;
+
+    # initialize modified_files array, only used if all flag is present
+    for (my $i = $START_LISTEN; $i < $EXEC_POSITION; $i++) {
+      push @modified_files, "no";
+    }
+
+    # get current modified info
     @current_epoch = diff();
 
+    # logic for multiple files
     if ($MULTI_FILES) {
+      # check if all files are modified
       if ($ALL_FLAG) {
         my $counter = 0;
 
+        # if output differs, mark as modified
         foreach $modified (@modified_files) {
           if (@current_epoch[$counter] != @previous_epoch[$counter]) {
             $modified = "yes";
           }
           $counter++;
         }
+        # if one file is not modified, do not run
         foreach $modified (@modified_files) {
-          my $run = 'def';
+          $run = 'def';
           if ($modified !~ "yes") {
             $run = undef;
+            last;
           }
         }
+      # check if any of the files are modified
       } else {
         my $counter = 0;
 
+        # if output differs, run command
         foreach (@current_epoch) {
           if ($current_epoch[$counter] != $previous_epoch[$counter]) {
             $run = "def";
             $file_changed = $counter;
+            last;
           }
           $counter++;
         }
       }
+    # logic for singular files
     } else {
       if ($current_epoch[0] != $previous_epoch[0]) {
         $run = "def";
@@ -298,13 +357,22 @@ sub start {
       }
     }
 
+    # if logic above allows the executable to run
     if ($run) {
+      # change output if multiple files are present
       if ($MULTI_FILES) {
-        print "$black& File \"$ARGV[$file_changed + 1]\" modified. Running command...$nocolor\n";
+        if ($ANY_FLAG) {
+          print "$black& File \"$ARGV[$file_changed + 1]\" modified. Running command...$nocolor\n";
+        } elsif ($ALL_FLAG) {
+          print "$black& All files have been modified. Running command...$nocolor\n";
+        }
       } else {
         print "$black& File \"$ARGV[$START_LISTEN]\" modified. Running command...$nocolor\n";
       }
+
+      # run command
       system $EXEC_LISTEN;
+      # catch return code
       my $status = $? >> 8;
       if (int($status) != 0) {
         print "$black& WARNING: Exit code is $status. Returned to listen...$nocolor\n";
@@ -312,6 +380,7 @@ sub start {
         print "$black& Returned to listen...$nocolor\n";
       }
 
+      # overwrite current as previous
       @previous_epoch = @current_epoch;
     }
 
